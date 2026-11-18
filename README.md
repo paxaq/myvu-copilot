@@ -2,7 +2,7 @@
 
 An experimental iPhone companion for MYVU XGA010C glasses. The goal is to listen to an English conversation, remember its context, and periodically show a short, useful follow-up question privately on the lens, without speaking aloud.
 
-**Current stage: microphone diagnostics and on-device English transcription.** Real XGA010C microphone packets have been received and decoded. Earlier tests stopped after roughly 30 seconds, including without a display card, while the prototype forced Continuous Conversation off. Capture now honors that setting; its effect on the cutoff remains untested. Automatic meeting analysis, continuous capture, simultaneous recording/display, and long-running background operation are not validated.
+**Current stage: microphone diagnostics and on-device English transcription.** Real XGA010C microphone packets have been received and decoded. Capture now honors Continuous Conversation; a subsequent On session still stopped around 30 seconds, but no speech was detected in that session. A separate 9-second sample did detect speech and had no decoder errors. The cutoff mechanism remains unresolved. Automatic meeting analysis, continuous capture, simultaneous recording/display, and long-running background operation are not validated.
 
 ## Available in the prototype
 
