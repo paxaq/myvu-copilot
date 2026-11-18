@@ -55,7 +55,7 @@ For a conversation-mode comparison, stop the test, change Settings → Voice Ass
 
 The first user test found no assistant menu/button. The prototype now requests the microphone from the phone and preserves the wearer's wake-word settings instead of disabling them. Subsequent tests received real microphone audio with zero decoder errors, but capture stopped after roughly 30 seconds, including a no-card control test. Whether the phone request alone or the physical-button fallback activated capture has not been isolated. The official translation/transcription feature has a separate protocol worth investigating; its complete startup and audio flow are not implemented here. No firmware change has been made. The physical-button fallback is described in [Meizu's MYVU Q&A](https://www.meizu.cn/thread/22441835).
 
-See [the development plan](COPILOT-PLAN.md) and [prototype status](COPILOT-STATUS.md).
+See [the development plan](COPILOT-PLAN.md), [prototype status](COPILOT-STATUS.md), and [developer handoff](HANDOFF.md).
 
 ## Source and licenses
 
