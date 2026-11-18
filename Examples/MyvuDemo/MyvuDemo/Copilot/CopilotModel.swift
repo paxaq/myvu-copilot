@@ -7,10 +7,26 @@ import SwiftUI
 @MainActor
 final class CopilotModel: ObservableObject {
     enum Phase { case idle, preparing, armed, recording, stopping }
+    /// Which glasses feature delivers the audio. Transcribe is the firmware's
+    /// long-form recorder and the candidate for silence-tolerant sessions; the
+    /// assistant path is kept for comparison (it stops after ~30 s).
+    enum Channel: String, CaseIterable, Identifiable {
+        case transcribe, assistant
+        var id: String { rawValue }
+        var title: String { self == .transcribe ? "Glasses Transcribe app" : "Voice assistant (code 110)" }
+    }
+    private enum ActiveCapture {
+        case assistant(GlassesMicCapture)
+        case transcribe(TranscribeChannelCapture)
+    }
     @Published private(set) var phase = Phase.idle
     @Published private(set) var status = "Ready for a microphone test"
     @Published private(set) var speechStatus = "English model not checked"
     @Published private(set) var update: GlassesMicCapture.Update?
+    @Published private(set) var transcribeUpdate: TranscribeChannelCapture.Update?
+    @Published private(set) var activeChannel: Channel?
+    @Published var channel = Channel.transcribe
+    @Published var openTranscribeFromPhone = true
     @Published private(set) var transcript = ""
     @Published private(set) var partial = ""
     @Published private(set) var recordingURL: URL?
@@ -20,7 +36,7 @@ final class CopilotModel: ObservableObject {
     @Published var transcribeLocally = true
     @Published var saveRecording = false
     private let client: MyvuClient
-    private var capture: GlassesMicCapture?
+    private var capture: ActiveCapture?
     private var transcriber: (any LocalTranscribing)?
     private var startTask: Task<Void, Never>?
     private var audioTask: Task<Void, Never>?
@@ -61,6 +77,7 @@ final class CopilotModel: ObservableObject {
         transcript = ""
         partial = ""
         update = nil
+        transcribeUpdate = nil
         recordingURL = nil
         reportURL = nil
         cardStatus = ""
@@ -71,6 +88,9 @@ final class CopilotModel: ObservableObject {
         startedAt = Date()
         let shouldTranscribe = transcribeLocally
         let shouldSave = saveRecording
+        let selectedChannel = channel
+        let openScene = openTranscribeFromPhone
+        activeChannel = selectedChannel
         startTask = Task { [weak self] in
             guard let self else { return }
             var speech: (any LocalTranscribing)?
@@ -96,9 +116,8 @@ final class CopilotModel: ObservableObject {
                 } else { self.speechStatus = "Transcription off — audio diagnostics only" }
                 try Task.checkCancellation()
                 guard self.generation == token else { await speech?.cancel(); return }
-                let session = try GlassesMicCapture(client: self.client, restorePreferences: preferences)
                 let (audio, continuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(128))
-                session.onPCM = { [weak self] pcm in
+                let onPCM: (Data) -> Void = { [weak self] pcm in
                     if case .dropped = continuation.yield(pcm) {
                         Task { @MainActor [weak self] in
                             guard self?.generation == token else { return }
@@ -107,17 +126,7 @@ final class CopilotModel: ObservableObject {
                         }
                     }
                 }
-                session.onUpdate = { [weak self] value in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.generation == token else { return }
-                        self.update = value
-                        self.status = value.status
-                        if self.phase != .stopping {
-                            self.phase = value.stats.frames > 0 ? .recording : .armed
-                        }
-                    }
-                }
-                session.onFinish = { [weak self] url, reason in
+                let onFinish: (URL?, String?) -> Void = { [weak self] url, reason in
                     continuation.finish()
                     Task { @MainActor [weak self] in
                         await self?.finished(url: url, reason: reason, token: token)
@@ -134,12 +143,49 @@ final class CopilotModel: ObservableObject {
                         }
                     }
                 }
-                let url = shouldSave ? try self.diagnosticsDirectory()
-                    .appendingPathComponent("\(token.uuidString).wav") : nil
-                self.capture = session
-                try session.start(recordingTo: url)
+                let directory = try self.diagnosticsDirectory()
+                let url = shouldSave ? directory.appendingPathComponent("\(token.uuidString).wav") : nil
+                switch selectedChannel {
+                case .assistant:
+                    let session = try GlassesMicCapture(client: self.client, restorePreferences: preferences)
+                    session.onPCM = onPCM
+                    session.onFinish = onFinish
+                    session.onUpdate = { [weak self] value in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.generation == token else { return }
+                            self.update = value
+                            self.status = value.status
+                            if self.phase != .stopping {
+                                self.phase = value.stats.frames > 0 ? .recording : .armed
+                            }
+                        }
+                    }
+                    self.capture = .assistant(session)
+                    try session.start(recordingTo: url)
+                    self.status = "Microphone requested — waiting for glasses audio"
+                case .transcribe:
+                    let session = try TranscribeChannelCapture(client: self.client)
+                    session.onPCM = onPCM
+                    session.onFinish = onFinish
+                    session.onUpdate = { [weak self] value in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.generation == token else { return }
+                            self.transcribeUpdate = value
+                            self.status = value.status
+                            if self.phase != .stopping {
+                                self.phase = value.proximal.frames + value.remote.frames > 0 ? .recording : .armed
+                            }
+                        }
+                    }
+                    self.capture = .transcribe(session)
+                    // Raw payloads are kept only with the WAV opt-in, for decoding
+                    // a still-unknown packing offline.
+                    let raw = shouldSave ? directory.appendingPathComponent("\(token.uuidString).transcribe.bin") : nil
+                    try session.start(openScene: openScene, recordingTo: url, rawPayloadsTo: raw)
+                    self.status = openScene ? "Asked the glasses to open Transcribe"
+                        : "Open Transcribe on the glasses to begin"
+                }
                 self.phase = .armed
-                self.status = "Microphone requested — waiting for glasses audio"
                 self.startTask = nil
             } catch {
                 await speech?.cancel()
@@ -166,12 +212,34 @@ final class CopilotModel: ObservableObject {
         }
         phase = .stopping
         status = "Stopping capture and finalizing transcription"
-        capture?.stop()
+        switch capture {
+        case .assistant(let session): session.stop()
+        case .transcribe(let session): session.stop()
+        case nil: break
+        }
     }
 
     func requestMicrophone() {
-        guard isCapturing else { return }
-        capture?.requestMicrophone()
+        guard isCapturing, case .assistant(let session) = capture else { return }
+        session.requestMicrophone()
+    }
+
+    func openTranscribeOnGlasses() {
+        guard isCapturing, case .transcribe(let session) = capture else { return }
+        session.openScene()
+    }
+
+    func sendTranscribeStart() {
+        guard isCapturing, case .transcribe(let session) = capture else { return }
+        session.sendStart()
+    }
+
+    private func recordDisplayRequest(showing: Bool) {
+        switch capture {
+        case .assistant(let session): session.recordDisplayRequest(showing: showing)
+        case .transcribe(let session): session.recordDisplayRequest(showing: showing)
+        case nil: break
+        }
     }
 
     private func finished(url: URL?, reason: String?, token: UUID) async {
@@ -190,10 +258,11 @@ final class CopilotModel: ObservableObject {
         status = reason ?? "Capture stopped"
         do {
             let directory = try diagnosticsDirectory()
-            let report = Report(startedAt: startedAt, finishedAt: Date(),
-                input: "XGA010C glasses microphone (code 109)",
+            let input = activeChannel == .transcribe
+                ? "XGA010C glasses Transcribe app (msgCmd 3/4)" : "XGA010C glasses microphone (code 109)"
+            let report = Report(startedAt: startedAt, finishedAt: Date(), input: input,
                 savedAudio: url != nil, localTranscription: transcribeLocally,
-                result: reason ?? "Stopped by user", update: update,
+                result: reason ?? "Stopped by user", update: update, transcribeUpdate: transcribeUpdate,
                 speechResultCount: speechResultCount, speechFinalResultCount: speechFinalResultCount)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -207,7 +276,7 @@ final class CopilotModel: ObservableObject {
     func showTestCard() {
         guard isCapturing else { return }
         cardTask?.cancel()
-        capture?.recordDisplayRequest(showing: true)
+        recordDisplayRequest(showing: true)
         testCardOutstanding = true
         client.sendAction(LensCards.buildShow(title: "Copilot · Display test",
             body: "What is the deadline, and who owns the next step?", numericId: Self.cardID))
@@ -223,7 +292,7 @@ final class CopilotModel: ObservableObject {
     private func clearTestCard() {
         guard testCardOutstanding else { return }
         testCardOutstanding = false
-        capture?.recordDisplayRequest(showing: false)
+        recordDisplayRequest(showing: false)
         client.sendAction(LensCards.buildDismiss(numericId: Self.cardID))
     }
 
@@ -246,6 +315,7 @@ final class CopilotModel: ObservableObject {
         let localTranscription: Bool
         let result: String
         let update: GlassesMicCapture.Update?
+        let transcribeUpdate: TranscribeChannelCapture.Update?
         let speechResultCount: Int
         let speechFinalResultCount: Int
     }

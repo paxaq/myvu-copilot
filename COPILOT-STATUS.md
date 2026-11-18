@@ -1,6 +1,97 @@
 # Copilot 原型进度
 
-2026-11-17，分支 `main`。当前交付 P0 录音诊断及本地转写原型，不是已完成的会议 Copilot。
+2026-11-17，分支 `main`。当前交付 P0 录音诊断及本地转写原型，不是已完成的会议 Copilot。默认音频来源已改为眼镜 Transcribe 功能入口（实验）。
+
+## 转写通道（build 8）：iPhone 已收到眼镜转写音频
+
+**build 8 实测（报告 `D25E45DD…`，2026-11-17）**
+- **握手**：
+  1. 手机发 `open_app`。
+  2. 0.98 秒：眼镜请求启动 TranslationService。
+  3. 1.60 秒：手机发 52 PREPARING / RUNNING 和 61。
+  4. 2.03 秒：手机再次发 `open_app`。
+  5. 2.14 秒：眼镜回 TRANS_CLICK_START。
+  6. 手机回 52 PREPARING，2.46 秒回 RUNNING 和 **RECORD_STATE start（51）**。
+  7. 2.78 秒：首个音频到达。
+
+  build 7 少了 51，眼镜进入了转写但不送音频，所以 51 START 是开麦条件。
+- **音频**：
+  - 只有 TRANS_REMOTE_AUDIO（msgCmd 4），StMessage 从 `com.upuphone.ar.translation.glasses` 发往 `com.upuphone.ar.translation.phone`，走 BLE external relay（category 3、msgType 3、appUniteCode 1）。
+  - 每条消息的 binary 字段是 **一个 240 字节的 Opus 包**，解码后为 960 样本，即 16 kHz 单声道 60 ms（32 kbps）。
+  - 2.7–43.9 秒共收到 688 条，解码 41.28 秒音频，与墙上时间一致。最长收包间隔 0.12 秒，损坏和解码错误均为 0。
+  - 最高帧 RMS −18.8 dBFS。
+  - 近端音频（msgCmd 3）没有出现，与官方 App 只在通话翻译中使用它一致。
+- **端侧转写**：Apple 转写返回 6 次结果、2 段最终结果。准确率尚未人工核对。
+- **与 Copilot 的关系**：
+  - 讲话期间显示和清除测试卡片，音频没有中断。
+  - 本次没有保存 WAV。
+  - 自带能量 VAD 记录的讲话段数为 0，与实际有语音不符，需要用保存的 WAV 核查阈值。
+- **尚未验证**：静音 2 分钟后是否继续送音（官方手机端在静音 5 分钟时可能主动停止，眼镜端是否另有超时未知）、10 分钟以上的长时运行、锁屏和后台。
+
+
+**build 7 实测：眼镜成功进入转写，但没有音频。**
+- 时序（报告 `2B4CDE89…`）：0.33 秒眼镜请求启动 TranslationService → 0.94 秒手机发 52 PREPARING / RUNNING 和 61 → 1.36 秒再次 `open_app` → 1.47 秒收到 TRANS_CLICK_START → 手机回 52 PREPARING / RUNNING。
+- 用户确认眼镜进入了转写界面。这是 iPhone 首次让眼镜转写场景启动成功。
+- 在 68 秒内，转写包名下没有收到任何 msgCmd 3 / 4 音频消息，其他控制消息也没有。
+
+**build 8**（排查音频去向）：
+- `MyvuClient` 新增不含内容的入站探针，记录每个 BLE 载荷的通道、种类、category、msgType、appUniteCode、包名、命令号和大小。报告和界面里按类别汇总显示（「Inbound traffic」）。
+- RUNNING 之后补发 RECORD_STATE START（51），检验眼镜是否在等手机录音状态才开麦。
+- 已安装，尚未实测。
+
+
+**build 6 实测**：
+- 眼镜在 1.71 秒请求启动 TranslationService，手机在 2.35 秒自动发出 61。此后约 100 秒，眼镜没有再发任何消息，未进入转写，也没有音频。
+- 由此判断，单发 61 不能触发开始。build 5 唯一一次得到 TRANS_CLICK_START，是在「52 PREPARING / RUNNING、61」之后又发了一次 `open_app`，眼镜在 0.08 秒后回应。
+
+**build 7**：
+- 收到启动请求 0.6 秒后，自动重放上述顺序：52 PREPARING、52 RUNNING、61，0.4 秒后再发一次带 `InitPhone2GlassInfo` 的 `open_app`。
+- 眼镜没回应时，每 3.5 秒重试一次，最多 3 次。
+- 已安装，尚未实测。
+
+
+**build 5 实测**：
+- 手机发 `open_app`（`com.upuphone.ar.translation.glasses`）后 0.3 秒，眼镜通过 RunAsOne type 11 请求启动 `com.upuphone.star.launcher@com.upuphone.ar.translation.phone.TranslationService`，SDK 已应答。之后眼镜停在「进入 Transcribe」，等手机服务回应。
+- 手动从 `translation.phone` 发出 TRANS_START（61）后约 0.1 秒内，眼镜回了 TRANS_CLICK_START（1），带 `{"transType":1,"dst":"en","src":"en","callState":0,"wechatReply":false}`。
+- build 5 的 2 秒重试节流把这次 1 跳过了，没有回 RUNNING，眼镜仍卡在进入状态。全程没有收到音频。
+
+**build 6**：
+- 看到眼镜请求启动 TranslationService 后 0.6 秒，自动发 61。
+- 每次收到 1 / 11 都回 52 PREPARING，0.3 秒后回 RUNNING，只合并 250 毫秒内的重复请求。
+- 已安装，尚未实测。
+
+
+**build 4 实测（2026-11-17）**：眼镜进不了转写。报告显示，响应的是 `com.upuphone.ar.translation.glasses`（翻译应用，`transType` 1 即转写），不是 `com.upuphone.ar.transcribe.glasses`。翻译应用在约 5.8 秒时发出 TRANS_EXIT（7），之前没有发过别的消息。build 4 发出的 `open_app` 和 61 / 51 包名都错了，手机也没有回任何状态，两路都没有收到音频。
+
+**build 5 修正**（依据官方翻译模块的 `InterConnectHelper`、`BleAudioHelper`、`TranslationManager` 及状态常量）：
+- 包名对改为手机端 `com.upuphone.ar.translation.phone` → 眼镜端 `com.upuphone.ar.translation.glasses`。
+- `open_app` 打开翻译应用，扩展参数用 `InitPhone2GlassInfo`。
+- 收到 1 / 11 后，回 TRANS_STATE（52）PREPARING（3），再回 RUNNING（4），不再自动发 61 / 51。
+- Stop 时发 52 END（2）和 65。
+- 自动选择音频流时优先远端（4）：官方 App 把这一路送进降噪和识别；近端（3）只用于通话翻译。
+- 官方手机端在静音 2 秒、5 秒、5 分钟时上报 mute，并可能在 5 分钟时停止。这些属于手机端策略，本 App 不发送。
+
+build 5 已签名并安装，尚未实测。
+
+以下为 build 4 的原始设计说明（包名部分已被上面的修正取代）。
+
+
+按用户要求，Copilot 默认改走眼镜自带的 Transcribe（转写）功能入口，而不是助手 code 110 / 109。助手通道保留为对照选项。
+
+- `GlassTranscribe`（MyvuCore）：转写模块独立的 `{"msgCmd":Int,"data":String}` 消息。命令号、`StartTrans` / `PreTranslationEntity` / `RecordStateEntity` 字段名，以及 `open_app` 场景启动方式，均取自官方中国区 Android 2.49.24 的转写和翻译模块（翻译模块的 `InterConnectHelper` 方法体基本可读）。
+- `MyvuClient.subscribeToAppMessages`：按包名订阅 StMessage（`2:src, 3:dst, 4:json, 5:bytes`）。带二进制字段的匹配消息不进文本日志和 JSON 扫描。
+- `TranscribeChannelCapture`（MyvuAudio）：
+  - 可选从手机发送 `open_app`（`com.upuphone.ar.transcribe.glasses`），也可由佩戴者在眼镜菜单里打开 Transcribe。
+  - 收到 GLASS_SERVER_START_COMPLETE（11）或 TRANS_CLICK_START（1）后，发送 TRANS_START（61，transType 1，en→en）和 RECORD_STATE start（51）。
+  - 解码 TRANS_PROXIMAL_AUDIO（3）/ TRANS_REMOTE_AUDIO（4）。
+  - 收到 TRANS_EXIT（7）时回 68 并结束。
+  - 静音不结束会话，也不自动重开；超过 3 秒无音频只标记 stall。会话上限 30 分钟。
+- `TranscribeAudioDecoder`：音频封装未从静态代码恢复。依次尝试 2 字节大端长度分帧 Opus、每条消息单个 Opus 包（需连续 3 次成功才认定）；都不行就报告 `undecodable`，不猜测为 PCM。打开 WAV 保存时，同时保存原始二进制载荷（`*.transcribe.bin`，上限 8 MB），供离线分析。
+- 诊断：报告记录双向控制消息（不含音频、识别结果或回复文本，单条最多 160 字符）、眼镜实际使用的包名、两路音频的格式/包数/时长/音量、最长间隙和讲话段数。
+
+**未恢复、需实机确认的部分**：`TransInterConnectManager` 的发送方法仍是受保护空桩，所以 StMessage 包名对（目前默认双向都用 `com.upuphone.ar.transcribe.glasses`；一旦眼镜发来消息，就改用其反向包名）、握手顺序、51 / 55 的必要性、音频编码，以及 `open_app` 能否在缺少经典蓝牙音频链路的 iOS 上打开转写场景，都还没有设备证据。眼镜若在没有识别结果（53 / 54）回传时自动退出，也需要实测判断。
+
+测试：新增 7 项 `TranscribeChannelTests`，与原有 7 项音频测试、43 项相关回归测试一同通过；MyvuCore 230 项测试通过（跳过既有截图测试 1 项）。iPhone arm64 签名 build 4 编译成功，**尚未安装、未实机测试**。
 
 ## 已实现
 

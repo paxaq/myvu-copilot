@@ -171,6 +171,80 @@ public final class MyvuClient {
         for (queue, handler) in subscriptions { queue.async { handler(body) } }
     }
 
+    private var appChannelSubscriptions: [UUID: AppChannelSubscription] = [:]
+
+    private struct AppChannelSubscription {
+        let queue: DispatchQueue
+        let matches: (AppChannelMessage) -> Bool
+        let handler: (AppChannelMessage) -> Void
+    }
+
+    /// Delivers decoded StMessage envelopes (packages, JSON and the binary
+    /// field) for one glasses app, e.g. Transcribe. Matching messages that
+    /// carry binary data are consumed here and never reach the text log or
+    /// the JSON scanner; JSON-only ones still follow the normal path.
+    @discardableResult
+    public func subscribeToAppMessages(queue: DispatchQueue,
+                                       matching: @escaping (AppChannelMessage) -> Bool,
+                                       handler: @escaping (AppChannelMessage) -> Void) -> UUID {
+        audioLock.lock()
+        defer { audioLock.unlock() }
+        let token = UUID()
+        appChannelSubscriptions[token] = AppChannelSubscription(queue: queue, matches: matching,
+                                                                handler: handler)
+        return token
+    }
+
+    public func unsubscribeFromAppMessages(_ token: UUID) {
+        audioLock.lock()
+        defer { audioLock.unlock() }
+        appChannelSubscriptions.removeValue(forKey: token)
+    }
+
+    private var inboundTaps: [UUID: (DispatchQueue, (InboundFrameSummary) -> Void)] = [:]
+
+    /// Content-free description of EVERY inbound BLE payload, for finding
+    /// where a feature's data actually arrives. Only sizes, routing fields and
+    /// the command number are reported; bodies are never passed on.
+    @discardableResult
+    public func subscribeToInboundSummaries(queue: DispatchQueue,
+                                            handler: @escaping (InboundFrameSummary) -> Void) -> UUID {
+        audioLock.lock()
+        defer { audioLock.unlock() }
+        let token = UUID()
+        inboundTaps[token] = (queue, handler)
+        return token
+    }
+
+    public func unsubscribeFromInboundSummaries(_ token: UUID) {
+        audioLock.lock()
+        defer { audioLock.unlock() }
+        inboundTaps.removeValue(forKey: token)
+    }
+
+    private func tapInbound(_ make: () -> InboundFrameSummary) {
+        audioLock.lock()
+        let taps = Array(inboundTaps.values)
+        audioLock.unlock()
+        guard !taps.isEmpty else { return }
+        let summary = make()
+        for (queue, handler) in taps { queue.async { handler(summary) } }
+    }
+
+    /// Returns true when a binary message was consumed by a subscriber.
+    private func dispatchAppChannel(_ body: Data) -> Bool {
+        audioLock.lock()
+        let subscriptions = Array(appChannelSubscriptions.values)
+        audioLock.unlock()
+        guard !subscriptions.isEmpty, let message = AppChannelMessage.parse(body) else { return false }
+        var delivered = false
+        for subscription in subscriptions where subscription.matches(message) {
+            delivered = true
+            subscription.queue.async { subscription.handler(message) }
+        }
+        return delivered && !message.binary.isEmpty
+    }
+
     public func addObserver(_ observer: MyvuClientObserver, queue: DispatchQueue = .main) {
         observerLock.lock()
         defer { observerLock.unlock() }
@@ -474,6 +548,10 @@ public final class MyvuClient {
         if let pairing, pairing.onInternalMessage(payload) { return }
 
         let msg = LinkProtocol.parse(payload)
+        tapInbound {
+            InboundFrameSummary(channel: "internal", kind: "link", size: payload.count,
+                                command: "link=\(msg.cmd)")
+        }
         switch msg.cmd {
         case LinkCommands.sppServerUuidSync:
             handleRelayUuidSync(msg.data)
@@ -579,13 +657,16 @@ public final class MyvuClient {
         // The ability reply is a bare StreamReq (class byte 0x02); everything
         // else is a relay frame (prefix 0x01).
         if payload.first == Session.authClassByte {
+            tapInbound { InboundFrameSummary(channel: "external", kind: "ability", size: payload.count) }
             handleAbilityReply(payload)
             return
         }
         guard let m = Relay.parseFrame(payload) else {
+            tapInbound { InboundFrameSummary(channel: "external", kind: "unparsed", size: payload.count) }
             SdkLog.trace("<- unparsed \(payload.count)B \(Hex.encode(payload.prefix(32)))")
             return
         }
+        tapInbound { InboundFrameSummary.relay(m) }
         handleRelayMessage(m)
     }
 
@@ -642,6 +723,8 @@ public final class MyvuClient {
                 handleShareFrame(m)
                 return
             }
+
+            if dispatchAppChannel(m.msgBody) { return }
 
             let body = m.msgBody.scannableText
             SdkLog.log("<- msgId=\(m.msgId) \(MyvuClient.truncate(body, 200))")
@@ -1312,5 +1395,59 @@ public final class MyvuClient {
         let marker = Data(#""code":109"#.utf8)
         guard body.count >= marker.count else { return false }
         return body.range(of: marker) != nil
+    }
+}
+
+/// One inbound payload, reduced to routing facts. No body bytes.
+public struct InboundFrameSummary: Sendable, Hashable {
+    public var channel: String
+    public var kind: String
+    public var category = -1
+    public var msgType = -1
+    public var appUniteCode = -1
+    public var size: Int
+    public var sourcePackage = ""
+    public var targetPackage = ""
+    public var command = ""
+    public var binaryBytes = 0
+
+    public init(channel: String, kind: String, size: Int, command: String = "") {
+        self.channel = channel
+        self.kind = kind
+        self.size = size
+        self.command = command
+    }
+
+    /// Same routing facts without the per-message size, for grouping.
+    public var groupKey: String {
+        "\(channel)/\(kind) cat=\(category) type=\(msgType) unite=\(appUniteCode) "
+            + "\(sourcePackage)→\(targetPackage) \(command)\(binaryBytes > 0 ? " +bin" : "")"
+    }
+
+    static func relay(_ m: RelayMessage) -> InboundFrameSummary {
+        var summary = InboundFrameSummary(channel: "external", kind: "relay", size: m.msgBody.count)
+        summary.category = m.category
+        summary.msgType = m.msgType
+        summary.appUniteCode = m.appUniteCode
+        if let envelope = AppChannelMessage.parse(m.msgBody) {
+            summary.sourcePackage = printable(envelope.sourcePackage)
+            summary.targetPackage = printable(envelope.targetPackage)
+            summary.binaryBytes = envelope.binary.count
+            if let reader = JsonReader(parsing: envelope.json) {
+                if reader.has("msgCmd") { summary.command = "msgCmd=\(reader.optInt("msgCmd", -1))" }
+                else if reader.has("code") { summary.command = "code=\(reader.optInt("code", -1))" }
+                else if reader.has("action") { summary.command = "action=\(reader.optString("action").prefix(32))" }
+                else if reader.has("type") { summary.command = "type=\(reader.optInt("type", -1))" }
+            } else if !envelope.json.isEmpty {
+                summary.command = "json?"
+            }
+        }
+        return summary
+    }
+
+    /// A non-StMessage body can parse into junk "strings"; keep only what
+    /// looks like a package name.
+    private static func printable(_ text: String) -> String {
+        String(text.unicodeScalars.filter { $0.value >= 32 && $0.value < 127 }.prefix(64).map(Character.init))
     }
 }

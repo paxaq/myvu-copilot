@@ -1,6 +1,6 @@
 # MYVU Copilot 开发交接
 
-更新：2026-11-17，America/Toronto。交接基线：`main` / `2ac8280`。
+更新：2026-11-17，America/Toronto。交接基线：`main`，转写入口实现见「Capture audio through the glasses Transcribe entry」提交（build 8）。
 
 ## 接手时先知道的事
 
@@ -119,6 +119,19 @@
 - code 110 官方 AppComponent 入口：`ev_086bc28162ea4c0df7e554658ad050b05ec72a2016d4baa986c28d71019ef5a4`。
 
 原 APK、恢复源码、完整证据包、真实诊断和 WAV 均在公开仓库之外，位置见同机本地交接补充。
+
+## 转写入口（本轮新增，build 8）
+
+用户要求改用眼镜的「转写」功能入口实现收音。已实现 `GlassTranscribe` 协议层、`TranscribeChannelCapture` 采集状态机及 App 接入；Copilot 页默认音频来源为 Glasses Transcribe app，助手通道保留对照。细节和未恢复项见 [实测进度](COPILOT-STATUS.md) 的「转写通道」一节。build 4 实测发现转写由眼镜翻译应用（`com.upuphone.ar.translation.glasses`）承载，且约 6 秒内等不到手机状态就退出；build 5 已能让眼镜发出 TranslationService 启动请求和 TRANS_CLICK_START，但因重试节流漏回 RUNNING，眼镜卡在进入界面；build 6 仅自动发 61，眼镜无回应；build 7 重放 build 5 成功前的完整顺序（52 → 61 → 再次 open_app）后，眼镜**成功进入转写**，但没有音频；build 8 补发 51 START 后，**眼镜开始稳定送出转写音频**：msgCmd 4，单个 240 B Opus 包 / 60 ms，41 秒无断流，已能解码并交给 Apple 端侧转写。下一步是静音保持测试。
+
+首次实测目标（一次即可）：
+
+1. Copilot 页选择 Glasses Transcribe app，打开「保存 WAV」，点 Start listening。
+2. 若眼镜没有打开转写，在眼镜菜单手动打开 Transcribe。
+3. 讲几句英语，然后静音至少 2 分钟，再讲话，最后 Stop。
+4. 导出报告（和 `.transcribe.bin`）。看事件日志确认真实握手、包名和音频格式，再修正发送顺序或解码方式。
+
+若完全没有转写消息到达，先区分：`open_app` 被忽略（iOS 无经典蓝牙链路）、眼镜需要的握手不同，还是眼镜转写在 iOS 不可用。
 
 ## 下一步建议与验收
 
