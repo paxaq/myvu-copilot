@@ -15,6 +15,7 @@ public final class GlassesMicCapture: MyvuClientObserver {
         public var status: String
         public var timeline: MicCaptureTimeline
         public var longestAudioGap: TimeInterval?
+        public var continuousDialogueEnabled: Bool
     }
 
     public var onUpdate: ((Update) -> Void)?
@@ -61,16 +62,24 @@ public final class GlassesMicCapture: MyvuClientObserver {
         }
         // These are transient device settings. Restore the wearer's original
         // preferences at stop; do not overwrite persisted preferences.
-        client.sendAssistantPreferences(.init(wakeWord: restorePreferences.wakeWord,
-            wakeWordScreenOff: restorePreferences.wakeWordScreenOff,
-            continuousDialogue: false, showWhatYouSaid: false,
-            speakReplies: false, showReplyText: false))
+        client.sendAssistantPreferences(Self.capturePreferences(from: restorePreferences))
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: 0.25)
         timer.setEventHandler { [weak self] in self?.tick() }
         self.timer = timer
         timer.resume()
         requestMicrophone()
+    }
+
+    /// Honor the wearer's conversation mode for a controlled hardware test,
+    /// while keeping all assistant reply/caption output disabled.
+    static func capturePreferences(from original: AiProtocol.AssistantPreferences)
+        -> AiProtocol.AssistantPreferences {
+        var result = original
+        result.showWhatYouSaid = false
+        result.speakReplies = false
+        result.showReplyText = false
+        return result
     }
 
     /// The official phone-side launch command. Wait for the glasses' code 3/7
@@ -169,7 +178,8 @@ public final class GlassesMicCapture: MyvuClientObserver {
         onUpdate?(Update(stats: processor.stats, wallDuration: wall,
             secondsSinceAudio: age, triggerCount: triggerCount,
             launchRequests: launchRequests, status: text, timeline: timeline,
-            longestAudioGap: timeline.longestGap(at: wall)))
+            longestAudioGap: timeline.longestGap(at: wall),
+            continuousDialogueEnabled: restorePreferences.continuousDialogue))
     }
 
     private func finish(error: String?) {
@@ -201,7 +211,8 @@ public final class GlassesMicCapture: MyvuClientObserver {
         onUpdate?(Update(stats: processor.stats, wallDuration: now - startedAt,
             secondsSinceAudio: lastAudioAt.map { now - $0 },
             triggerCount: triggerCount, launchRequests: launchRequests, status: "Capture stopped",
-            timeline: timeline, longestAudioGap: timeline.longestGap(at: now - startedAt)))
+            timeline: timeline, longestAudioGap: timeline.longestGap(at: now - startedAt),
+            continuousDialogueEnabled: restorePreferences.continuousDialogue))
     }
 
     private func mark(_ kind: MicCaptureTimeline.Kind) {

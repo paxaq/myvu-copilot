@@ -6,6 +6,26 @@ import XCTest
 @testable import MyvuAudio
 
 final class AudioCaptureTests: XCTestCase {
+    func testCaptureHonorsConversationAndWakePreferencesWithoutEnablingReplies() {
+        for enabled in [false, true] {
+            let original = AiProtocol.AssistantPreferences(wakeWord: enabled,
+                wakeWordScreenOff: enabled, continuousDialogue: enabled,
+                showWhatYouSaid: true, speakReplies: true, showReplyText: true, ttsTimbre: 2)
+            let capture = GlassesMicCapture.capturePreferences(from: original)
+            XCTAssertEqual(capture.continuousDialogue, enabled)
+            XCTAssertEqual(capture.wakeWord, enabled)
+            XCTAssertEqual(capture.wakeWordScreenOff, enabled)
+            XCTAssertEqual(capture.ttsTimbre, original.ttsTimbre)
+            XCTAssertFalse(capture.showWhatYouSaid)
+            XCTAssertFalse(capture.speakReplies)
+            XCTAssertFalse(capture.showReplyText)
+            let message = try? JSONSerialization.jsonObject(with:
+                Data(AiProtocol.assistantConfig(capture).utf8)) as? [String: Any]
+            let payload = message?["payload"] as? [String: Any]
+            XCTAssertEqual(payload?["isContinuousDialogueEnable"] as? Bool, enabled)
+            XCTAssertEqual(payload?["isChatGptTTSPlayEnable"] as? Bool, false)
+        }
+    }
     func testTimelineDistinguishesDisplayFromAudioOutageAndIncludesTrailingGap() {
         var timeline = MicCaptureTimeline()
         XCTAssertNil(timeline.longestGap(at: 10), "Initial waiting is not a stream outage")

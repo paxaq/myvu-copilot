@@ -426,9 +426,8 @@ private struct VoiceAssistantScreen: View {
                 Toggle("Continuous Conversation", isOn: bind(\.continuousDialogue))
                 Toggle("Display what you have said to Aicy", isOn: bind(\.showWhatYouSaid))
             } footer: {
-                Text("Continuous Conversation holds the mic open for a follow-up. "
-                    + "This app's own assistant still ends the turn after each "
-                    + "answer — see AiSession.spokenFollowUpTurns for why.")
+                Text("Allows follow-up conversation turns. Uninterrupted recording is still being tested. "
+                    + "Copilot uses the setting selected when its microphone test starts.")
             }
             .requiresSession(model.isReady)
 

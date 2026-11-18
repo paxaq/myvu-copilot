@@ -2,7 +2,7 @@
 
 An experimental iPhone companion for MYVU XGA010C glasses. The goal is to listen to an English conversation, remember its context, and periodically show a short, useful follow-up question privately on the lens, without speaking aloud.
 
-**Current stage: microphone diagnostics and on-device English transcription.** Real XGA010C microphone packets have been received and decoded, but the current assistant capture path stops after roughly 30 seconds in user tests, including without a display card. Automatic meeting analysis, continuous capture, simultaneous recording/display, and long-running background operation are not validated.
+**Current stage: microphone diagnostics and on-device English transcription.** Real XGA010C microphone packets have been received and decoded. Earlier tests stopped after roughly 30 seconds, including without a display card, while the prototype forced Continuous Conversation off. Capture now honors that setting; its effect on the cutoff remains untested. Automatic meeting analysis, continuous capture, simultaneous recording/display, and long-running background operation are not validated.
 
 ## Available in the prototype
 
@@ -37,7 +37,7 @@ With full Xcode selected:
 swift test --filter 'AudioCaptureTests|GlassesMicStreamTests|VoiceActivityTests|AiSessionTests|WavTests'
 ```
 
-The 6 audio/launch/timing tests and 43 related upstream tests passed on the development Mac. A Debug-only device self-test (`--copilot-self-test`) successfully decoded a bundled synthetic English sample and transcribed it with Apple SpeechAnalyzer on an iPhone 16 Pro Max. This self-test validates the decoder/transcriber pipeline; real microphone capture has been checked separately below.
+The 7 audio/launch/timing/preference tests and 43 related upstream tests passed on the development Mac. A Debug-only device self-test (`--copilot-self-test`) successfully decoded a bundled synthetic English sample and transcribed it with Apple SpeechAnalyzer on an iPhone 16 Pro Max. This self-test validates the decoder/transcriber pipeline; real microphone capture has been checked separately below.
 
 The full upstream test suite has a known failure in `ShareAbilityTests.testPngFromOneBlankHudRow`; it is not modified by this project.
 
@@ -48,6 +48,8 @@ The full upstream test suite has a known failure in `ShareAbilityTests.testPngFr
 3. For the first test, switch off local transcription, optionally enable local WAV recording, and start the microphone test. Start sends the official phone-to-glasses assistant launch request (`code:110`); only incoming audio proves that recording actually started.
 4. If there is no response, hold the physical power button underneath the right temple for about 1 second and release, then speak. This is different from a long press on the touchpad. Check whether the frame count and audio level change, then stop. There is no need to find a separate assistant app in the launcher menu.
 5. Once capture works, repeat with local transcription and test the fixed display card.
+
+For a conversation-mode comparison, stop the test, change Settings → Voice Assistant → Continuous Conversation, then start a fresh test. The diagnostics show the value requested at start, not a firmware acknowledgement. Leave transcription off and do not show cards during the first 60-second comparison. The switch allows follow-up conversation turns; uninterrupted recording remains a separate hardware test.
 
 The first user test found no assistant menu/button. The prototype now requests the microphone from the phone and preserves the wearer's wake-word settings instead of disabling them. Subsequent tests received real microphone audio with zero decoder errors, but capture stopped after roughly 30 seconds, including a no-card control test. Whether the phone request alone or the physical-button fallback activated capture has not been isolated. The official translation/transcription feature has a separate protocol worth investigating; its complete startup and audio flow are not implemented here. No firmware change has been made. The physical-button fallback is described in [Meizu's MYVU Q&A](https://www.meizu.cn/thread/22441835).
 
