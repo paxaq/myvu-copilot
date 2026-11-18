@@ -1,0 +1,32 @@
+.DS_Store
+.build/
+.swiftpm/
+build/
+DerivedData/
+**/xcuserdata/
+**/project.xcworkspace/
+*.xcuserstate
+__pycache__/
+*.pyc
+*.log
+
+# Local recordings, device reports, credentials and signed build artifacts.
+CopilotDiagnostics/
+diagnostics/
+downloads/
+.env
+.env.*
+!.env.example
+*.wav
+*.aiff
+*.pcm
+*.ipa
+*.xcarchive/
+*.mobileprovision
+*.p12
+*.p8
+*.pem
+*.key
+
+# Firmware packs are outside this application's scope.
+*.zip
