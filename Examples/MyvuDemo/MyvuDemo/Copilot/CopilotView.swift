@@ -68,6 +68,9 @@ struct CopilotView: View {
                     LabeledContent("Decoder errors", value: "\(update.stats.decodeErrors)")
                     LabeledContent("Assistant triggers", value: "\(update.triggerCount)")
                     LabeledContent("Microphone requests", value: "\(update.launchRequests)")
+                    LabeledContent("Longest audio gap", value: update.longestAudioGap.map {
+                        String(format: "%.1fs", $0)
+                    } ?? "No audio yet")
                 } else { Text("Start a test to inspect the audio stream.").foregroundStyle(.secondary) }
             }
 

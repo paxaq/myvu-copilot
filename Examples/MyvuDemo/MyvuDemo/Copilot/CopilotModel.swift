@@ -28,6 +28,9 @@ final class CopilotModel: ObservableObject {
     private var modelTask: Task<Void, Never>?
     private var generation = UUID()
     private var startedAt = Date()
+    private var speechResultCount = 0
+    private var speechFinalResultCount = 0
+    private var testCardOutstanding = false
     private static let cardID = 7_010_008
 
     var isBusy: Bool { phase != .idle || isPreparingModel }
@@ -61,6 +64,8 @@ final class CopilotModel: ObservableObject {
         recordingURL = nil
         reportURL = nil
         cardStatus = ""
+        speechResultCount = 0
+        speechFinalResultCount = 0
         let token = UUID()
         generation = token
         startedAt = Date()
@@ -80,7 +85,9 @@ final class CopilotModel: ObservableObject {
                     }
                     speech?.onText = { [weak self] text, final in
                         guard let self, self.generation == token else { return }
+                        self.speechResultCount += 1
                         if final {
+                            self.speechFinalResultCount += 1
                             self.transcript += (self.transcript.isEmpty ? "" : " ") + text
                             self.partial = ""
                         } else { self.partial = text }
@@ -151,7 +158,7 @@ final class CopilotModel: ObservableObject {
     func stop() {
         guard phase != .idle, phase != .stopping else { return }
         cardTask?.cancel()
-        client.sendAction(LensCards.buildDismiss(numericId: Self.cardID))
+        clearTestCard()
         if phase == .preparing {
             startTask?.cancel()
             status = "Cancelling preparation"
@@ -171,7 +178,7 @@ final class CopilotModel: ObservableObject {
         guard generation == token else { return }
         phase = .stopping
         cardTask?.cancel()
-        client.sendAction(LensCards.buildDismiss(numericId: Self.cardID))
+        clearTestCard()
         await audioTask?.value
         audioTask = nil
         await transcriber?.finish()
@@ -186,7 +193,8 @@ final class CopilotModel: ObservableObject {
             let report = Report(startedAt: startedAt, finishedAt: Date(),
                 input: "XGA010C glasses microphone (code 109)",
                 savedAudio: url != nil, localTranscription: transcribeLocally,
-                result: reason ?? "Stopped by user", update: update)
+                result: reason ?? "Stopped by user", update: update,
+                speechResultCount: speechResultCount, speechFinalResultCount: speechFinalResultCount)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
@@ -199,15 +207,24 @@ final class CopilotModel: ObservableObject {
     func showTestCard() {
         guard isCapturing else { return }
         cardTask?.cancel()
+        capture?.recordDisplayRequest(showing: true)
+        testCardOutstanding = true
         client.sendAction(LensCards.buildShow(title: "Copilot · Display test",
             body: "What is the deadline, and who owns the next step?", numericId: Self.cardID))
         cardStatus = "Test card sent. Check that audio keeps arriving."
         cardTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(10)) } catch { return }
             guard let self else { return }
-            self.client.sendAction(LensCards.buildDismiss(numericId: Self.cardID))
+            self.clearTestCard()
             self.cardStatus = "Test card cleared."
         }
+    }
+
+    private func clearTestCard() {
+        guard testCardOutstanding else { return }
+        testCardOutstanding = false
+        capture?.recordDisplayRequest(showing: false)
+        client.sendAction(LensCards.buildDismiss(numericId: Self.cardID))
     }
 
     private func diagnosticsDirectory() throws -> URL {
@@ -229,5 +246,7 @@ final class CopilotModel: ObservableObject {
         let localTranscription: Bool
         let result: String
         let update: GlassesMicCapture.Update?
+        let speechResultCount: Int
+        let speechFinalResultCount: Int
     }
 }

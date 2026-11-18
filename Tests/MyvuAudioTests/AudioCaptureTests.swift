@@ -6,6 +6,22 @@ import XCTest
 @testable import MyvuAudio
 
 final class AudioCaptureTests: XCTestCase {
+    func testTimelineDistinguishesDisplayFromAudioOutageAndIncludesTrailingGap() {
+        var timeline = MicCaptureTimeline()
+        XCTAssertNil(timeline.longestGap(at: 10), "Initial waiting is not a stream outage")
+        timeline.receivedAudio(at: 10, frames: 1)
+        timeline.receivedAudio(at: 10.06, frames: 2)
+        timeline.record(.cardShowRequested, at: 20, frames: 2)
+        timeline.receivedAudio(at: 21, frames: 3)
+        timeline.record(.cardDismissRequested, at: 30, frames: 3)
+        XCTAssertEqual(timeline.longestGap(at: 40)!, 19, accuracy: 0.001)
+        XCTAssertEqual(timeline.events.map(\.kind), [.firstAudio, .cardShowRequested,
+                                                    .audioResumed, .cardDismissRequested])
+        XCTAssertEqual(timeline.firstAudioAt, 10)
+        for i in 0..<200 { timeline.record(.microphoneRequested, at: Double(i + 40), frames: 3) }
+        XCTAssertEqual(timeline.events.count, 128)
+        XCTAssertEqual(timeline.omittedEvents, 76)
+    }
     func testPhoneLaunchCommandIsNotAForgedTriggerOrAck() throws {
         let bytes = try XCTUnwrap(AiProtocol.launchAssistant().data(using: .utf8))
         let message = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])

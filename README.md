@@ -2,7 +2,7 @@
 
 An experimental iPhone companion for MYVU XGA010C glasses. The goal is to listen to an English conversation, remember its context, and periodically show a short, useful follow-up question privately on the lens, without speaking aloud.
 
-**Current stage: microphone diagnostics and on-device English transcription.** Automatic meeting analysis and periodic contextual advice are not implemented yet. Real glasses capture, simultaneous recording/display, and long-running background operation still require validation.
+**Current stage: microphone diagnostics and on-device English transcription.** Real XGA010C microphone packets have been received and decoded, but the current assistant capture path stops after roughly 30 seconds in user tests, including without a display card. Automatic meeting analysis, continuous capture, simultaneous recording/display, and long-running background operation are not validated.
 
 ## Available in the prototype
 
@@ -37,7 +37,7 @@ With full Xcode selected:
 swift test --filter 'AudioCaptureTests|GlassesMicStreamTests|VoiceActivityTests|AiSessionTests|WavTests'
 ```
 
-The 5 audio/launch tests and 43 related upstream tests passed on the development Mac. A Debug-only device self-test (`--copilot-self-test`) successfully decoded a bundled synthetic English sample and transcribed it with Apple SpeechAnalyzer on an iPhone 16 Pro Max. This validates the decoder/transcriber pipeline, not the glasses microphone.
+The 6 audio/launch/timing tests and 43 related upstream tests passed on the development Mac. A Debug-only device self-test (`--copilot-self-test`) successfully decoded a bundled synthetic English sample and transcribed it with Apple SpeechAnalyzer on an iPhone 16 Pro Max. This self-test validates the decoder/transcriber pipeline; real microphone capture has been checked separately below.
 
 The full upstream test suite has a known failure in `ShareAbilityTests.testPngFromOneBlankHudRow`; it is not modified by this project.
 
@@ -49,7 +49,7 @@ The full upstream test suite has a known failure in `ShareAbilityTests.testPngFr
 4. If there is no response, hold the physical power button underneath the right temple for about 1 second and release, then speak. This is different from a long press on the touchpad. Check whether the frame count and audio level change, then stop. There is no need to find a separate assistant app in the launcher menu.
 5. Once capture works, repeat with local transcription and test the fixed display card.
 
-The first user test found no assistant menu/button. The prototype now requests the microphone from the phone and preserves the wearer's wake-word settings instead of disabling them. Actual launch support on XGA010C and continuous listening still need device validation. No firmware change is required for the initial tests. The physical-button fallback is described in [Meizu's MYVU Q&A](https://www.meizu.cn/thread/22441835).
+The first user test found no assistant menu/button. The prototype now requests the microphone from the phone and preserves the wearer's wake-word settings instead of disabling them. Subsequent tests received real microphone audio with zero decoder errors, but capture stopped after roughly 30 seconds, including a no-card control test. Whether the phone request alone or the physical-button fallback activated capture has not been isolated. The official translation/transcription feature has a separate protocol worth investigating; its complete startup and audio flow are not implemented here. No firmware change has been made. The physical-button fallback is described in [Meizu's MYVU Q&A](https://www.meizu.cn/thread/22441835).
 
 See [the development plan](COPILOT-PLAN.md) and [prototype status](COPILOT-STATUS.md).
 
