@@ -31,7 +31,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MyvuAudioTests",
-            dependencies: ["MyvuAudio", "MyvuCore", "COpus"],
+            dependencies: ["MyvuAudio", "MyvuCore", "MyvuAI", "COpus"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(

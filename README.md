@@ -37,7 +37,7 @@ With full Xcode selected:
 swift test --filter 'AudioCaptureTests|GlassesMicStreamTests|VoiceActivityTests|AiSessionTests|WavTests'
 ```
 
-The 4 new audio tests and 43 related upstream tests passed on the development Mac. A Debug-only device self-test (`--copilot-self-test`) successfully decoded a bundled synthetic English sample and transcribed it with Apple SpeechAnalyzer on an iPhone 16 Pro Max. This validates the decoder/transcriber pipeline, not the glasses microphone.
+The 5 audio/launch tests and 43 related upstream tests passed on the development Mac. A Debug-only device self-test (`--copilot-self-test`) successfully decoded a bundled synthetic English sample and transcribed it with Apple SpeechAnalyzer on an iPhone 16 Pro Max. This validates the decoder/transcriber pipeline, not the glasses microphone.
 
 The full upstream test suite has a known failure in `ShareAbilityTests.testPngFromOneBlankHudRow`; it is not modified by this project.
 
@@ -45,11 +45,11 @@ The full upstream test suite has a known failure in `ShareAbilityTests.testPngFr
 
 1. Exit the official MYVU app and disconnect other phones from the glasses.
 2. Connect in MyvuDemos, then open Conversation Copilot.
-3. For the first test, switch off local transcription, optionally enable local WAV recording, and start the microphone test.
-4. Trigger the glasses' normal voice-assistant gesture and speak. Check whether the frame count and audio level change, then stop.
+3. For the first test, switch off local transcription, optionally enable local WAV recording, and start the microphone test. Start sends the official phone-to-glasses assistant launch request (`code:110`); only incoming audio proves that recording actually started.
+4. If there is no response, hold the physical power button underneath the right temple for about 1 second and release, then speak. This is different from a long press on the touchpad. Check whether the frame count and audio level change, then stop. There is no need to find a separate assistant app in the launcher menu.
 5. Once capture works, repeat with local transcription and test the fixed display card.
 
-The first user test reported an error or difficulty locating the entry point; diagnosis is pending. Continuous listening is not yet proven. No firmware change is required for the initial tests.
+The first user test found no assistant menu/button. The prototype now requests the microphone from the phone and preserves the wearer's wake-word settings instead of disabling them. Actual launch support on XGA010C and continuous listening still need device validation. No firmware change is required for the initial tests. The physical-button fallback is described in [Meizu's MYVU Q&A](https://www.meizu.cn/thread/22441835).
 
 See [the development plan](COPILOT-PLAN.md) and [prototype status](COPILOT-STATUS.md).
 

@@ -132,7 +132,7 @@ final class CopilotModel: ObservableObject {
                 self.capture = session
                 try session.start(recordingTo: url)
                 self.phase = .armed
-                self.status = "Armed — trigger the assistant on the glasses, then speak"
+                self.status = "Microphone requested — waiting for glasses audio"
                 self.startTask = nil
             } catch {
                 await speech?.cancel()
@@ -160,6 +160,11 @@ final class CopilotModel: ObservableObject {
         phase = .stopping
         status = "Stopping capture and finalizing transcription"
         capture?.stop()
+    }
+
+    func requestMicrophone() {
+        guard isCapturing else { return }
+        capture?.requestMicrophone()
     }
 
     private func finished(url: URL?, reason: String?, token: UUID) async {

@@ -1,10 +1,17 @@
 import COpus
 import Foundation
 import MyvuCore
+import MyvuAI
 import XCTest
 @testable import MyvuAudio
 
 final class AudioCaptureTests: XCTestCase {
+    func testPhoneLaunchCommandIsNotAForgedTriggerOrAck() throws {
+        let bytes = try XCTUnwrap(AiProtocol.launchAssistant().data(using: .utf8))
+        let message = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        XCTAssertEqual(message["code"] as? Int, 110)
+        XCTAssertEqual(message.count, 1, "Official launch sends a null/omitted payload, not a fake recording session")
+    }
     private func encodedPacket() throws -> Data {
         var error: Int32 = 0
         let encoder = try XCTUnwrap(opus_encoder_create(16_000, 1, OPUS_APPLICATION_VOIP, &error))

@@ -11,6 +11,7 @@ public final class GlassesMicCapture: MyvuClientObserver {
         public var wallDuration: TimeInterval
         public var secondsSinceAudio: TimeInterval?
         public var triggerCount: Int
+        public var launchRequests: Int
         public var status: String
     }
 
@@ -28,10 +29,12 @@ public final class GlassesMicCapture: MyvuClientObserver {
     private var lastAudioAt: Double?
     private var lastTriggerAt = -Double.infinity
     private var triggerCount = 0
+    private var launchRequests = 0
+    private var lastLaunchAt = -Double.infinity
     private var sessionID = ""
     private var vad = VoiceActivity()
     private var vadSent = false
-    private var status = "Waiting for the glasses' assistant button"
+    private var status = "Waiting to request the glasses microphone"
     private let restorePreferences: AiProtocol.AssistantPreferences
 
     public init(client: MyvuClient, restorePreferences: AiProtocol.AssistantPreferences) throws {
@@ -54,7 +57,8 @@ public final class GlassesMicCapture: MyvuClientObserver {
         }
         // These are transient device settings. Restore the wearer's original
         // preferences at stop; do not overwrite persisted preferences.
-        client.sendAssistantPreferences(.init(wakeWord: false, wakeWordScreenOff: false,
+        client.sendAssistantPreferences(.init(wakeWord: restorePreferences.wakeWord,
+            wakeWordScreenOff: restorePreferences.wakeWordScreenOff,
             continuousDialogue: false, showWhatYouSaid: false,
             speakReplies: false, showReplyText: false))
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -62,6 +66,21 @@ public final class GlassesMicCapture: MyvuClientObserver {
         timer.setEventHandler { [weak self] in self?.tick() }
         self.timer = timer
         timer.resume()
+        requestMicrophone()
+    }
+
+    /// The official phone-side launch command. Wait for the glasses' code 3/7
+    /// before acknowledging its recording session; do not fake an inbound event.
+    public func requestMicrophone() {
+        queue.async { [weak self] in
+            guard let self, self.active else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - self.lastLaunchAt >= 1.5 else { return }
+            self.lastLaunchAt = now
+            self.launchRequests += 1
+            self.status = "Microphone requested — waiting for glasses response"
+            self.send(AiProtocol.launchAssistant())
+        }
     }
 
     public func stop() { queue.async { [weak self] in self?.finish(error: nil) } }
@@ -109,13 +128,19 @@ public final class GlassesMicCapture: MyvuClientObserver {
         if wall >= 600 { finish(error: "The 10-minute diagnostic session ended."); return }
         let age = lastAudioAt.map { now - $0 }
         var text = status
+        if lastAudioAt == nil, launchRequests > 0, now - lastLaunchAt >= 5 {
+            text = triggerCount == 0
+                ? "No response yet — hold the right power button for 1 second"
+                : "Assistant responded, but no microphone audio arrived"
+        }
         if let age {
             if age > 3 { text = "Audio stream stalled — no automatic restart" }
             else if processor.stats.frames > 0 { text = "Receiving glasses microphone audio" }
             else { text = "Packets arrived, but no audio decoded" }
         }
         onUpdate?(Update(stats: processor.stats, wallDuration: wall,
-            secondsSinceAudio: age, triggerCount: triggerCount, status: text))
+            secondsSinceAudio: age, triggerCount: triggerCount,
+            launchRequests: launchRequests, status: text))
     }
 
     private func finish(error: String?) {
@@ -145,7 +170,7 @@ public final class GlassesMicCapture: MyvuClientObserver {
         let now = ProcessInfo.processInfo.systemUptime
         onUpdate?(Update(stats: processor.stats, wallDuration: now - startedAt,
             secondsSinceAudio: lastAudioAt.map { now - $0 },
-            triggerCount: triggerCount, status: "Capture stopped"))
+            triggerCount: triggerCount, launchRequests: launchRequests, status: "Capture stopped"))
     }
 
     deinit {

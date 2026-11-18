@@ -45,6 +45,10 @@ public enum AiProtocol {
     public static let codeHotWordManager = 107
     /// glasses → phone: mic audio.
     public static let codeRecordDataTrans = 109
+    /// phone → glasses: launch the assistant (no payload). Observed in the
+    /// official Android AppComponent's LAUNCH_AI_ASSISTANT_ACTION handler.
+    /// This requests launch; only an incoming trigger/audio proves it worked.
+    public static let codeLaunchGlassAssistant = 110
     /// phone → glasses: answer text.
     public static let codeChatGptResponse = 122
     /// phone → glasses: one assistant preference. See `assistantSetting`.
@@ -181,6 +185,12 @@ public enum AiProtocol {
         p.put("sessionId", sessionId)
         p.put("success", true)
         return message(codeStartVrRes, p)
+    }
+
+    public static func launchAssistant() -> String {
+        var out = JsonObject()
+        out.put("code", codeLaunchGlassAssistant)
+        return out.serialized()
     }
 
     /// 104 type:1 — speech detected. The ONLY thing that clears the 8s timeout.

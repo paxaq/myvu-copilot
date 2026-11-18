@@ -24,12 +24,18 @@ struct CopilotView: View {
                         .disabled(!glasses.isReady || model.isPreparingModel)
                         .accessibilityIdentifier("copilot.start")
                 } else {
+                    if model.isCapturing {
+                        Button("Request glasses microphone again") { model.requestMicrophone() }
+                            .accessibilityIdentifier("copilot.requestMicrophone")
+                    }
                     Button(model.phase == .stopping ? "Stopping…" : "Stop", role: .destructive) { model.stop() }
                         .disabled(model.phase == .stopping)
                         .accessibilityIdentifier("copilot.stop")
                 }
             } header: { Text("Capture") } footer: {
-                Text("After starting, trigger the voice assistant on your glasses and speak. "
+                Text("Start requests the glasses microphone from this iPhone. "
+                    + "If no audio arrives, hold the physical power button underneath the right temple "
+                    + "for about 1 second, then release and speak. There is no separate assistant menu to find. "
                     + "Audio is processed on this iPhone. A WAV is saved only when enabled. "
                     + "Continuous capture and lock-screen operation are still being tested.")
             }
@@ -61,6 +67,7 @@ struct CopilotView: View {
                     LabeledContent("Malformed messages", value: "\(update.stats.malformedMessages)")
                     LabeledContent("Decoder errors", value: "\(update.stats.decodeErrors)")
                     LabeledContent("Assistant triggers", value: "\(update.triggerCount)")
+                    LabeledContent("Microphone requests", value: "\(update.launchRequests)")
                 } else { Text("Start a test to inspect the audio stream.").foregroundStyle(.secondary) }
             }
 
