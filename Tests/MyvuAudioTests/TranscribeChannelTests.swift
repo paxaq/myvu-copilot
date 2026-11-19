@@ -76,6 +76,12 @@ final class TranscribeChannelTests: XCTestCase {
         let empty = try line(GlassTranscribe.buildSubtitle("", committed: true))
         XCTAssertEqual(empty.src.optString("content"), "")
         XCTAssertEqual(partial.src.optString("content").last, "e", "partials get no separator")
+        let chinese = try line(GlassTranscribe.buildSubtitle("下周一交付。", committed: true))
+        XCTAssertEqual(chinese.src.optString("content"), "下周一交付。", "Chinese is joined without spaces")
+        let han = try line(GlassTranscribe.buildSubtitle("预算两万 ", committed: true))
+        XCTAssertEqual(han.src.optString("content"), "预算两万")
+        let mixed = try line(GlassTranscribe.buildSubtitle("我们用 SOC 2", committed: true))
+        XCTAssertEqual(mixed.src.optString("content"), "我们用 SOC 2 ", "a Latin ending keeps its space")
 
         let long = String(repeating: "word ", count: 400)
         let capped = try line(GlassTranscribe.buildSubtitle(long, committed: false))

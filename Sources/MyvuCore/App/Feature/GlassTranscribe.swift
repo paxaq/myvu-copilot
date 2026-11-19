@@ -234,12 +234,13 @@ public enum GlassTranscribe {
     ///
     /// The text view appends each committed line straight after the previous
     /// one with no separator, so a committed line ends with one space; the next
-    /// partial is drawn after it.
+    /// partial is drawn after it. Chinese and Japanese text is written without
+    /// spaces, so a line ending in such a character or its punctuation gets none.
     public static func buildSubtitle(_ text: String, committed: Bool) -> String {
         var body = text
         if committed {
             while body.last?.isWhitespace == true { body.removeLast() }
-            if !body.isEmpty { body += " " }
+            if let last = body.last, !joinsWithoutSpace(last) { body += " " }
         }
         let content = body.count > subtitleCharacterLimit ? String(body.suffix(subtitleCharacterLimit)) : body
         var line = JsonObject()
@@ -248,6 +249,18 @@ public enum GlassTranscribe {
         var data = JsonObject()
         data.put("src", line)
         return message(Phone2Glass.remoteResult, data: data.serialized())
+    }
+
+    /// Han ideographs, kana, CJK punctuation and full-width forms.
+    static func joinsWithoutSpace(_ character: Character) -> Bool {
+        guard let scalar = character.unicodeScalars.first?.value else { return false }
+        switch scalar {
+        case 0x3000 ... 0x30FF, 0x3400 ... 0x4DBF, 0x4E00 ... 0x9FFF, 0xF900 ... 0xFAFF, 0xFF00 ... 0xFFEF,
+             0x20000 ... 0x2FA1F:
+            return true
+        default:
+            return false
+        }
     }
 
     /// TRANS_EXIT (68), no data. The firmware's `PStopMsg` calls `stopTrans`
