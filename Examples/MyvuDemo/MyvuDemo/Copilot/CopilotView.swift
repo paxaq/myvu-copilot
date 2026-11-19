@@ -29,6 +29,11 @@ struct CopilotView: View {
                 }
                 Toggle("On-device English transcription", isOn: $model.transcribeLocally)
                     .disabled(model.isBusy)
+                Picker("Show transcript on glasses", selection: $model.subtitleMode) {
+                    ForEach(CopilotModel.SubtitleMode.allCases) { Text($0.title).tag($0) }
+                }
+                .disabled(model.isBusy || !model.transcribeLocally)
+                .accessibilityIdentifier("copilot.subtitles")
                 Toggle("Save a local WAV recording", isOn: $model.saveRecording)
                     .disabled(model.isBusy)
                 if model.phase == .idle {
@@ -65,6 +70,8 @@ struct CopilotView: View {
                         + "This channel stops after about 30 seconds in tests so far.")
                 }
             }
+
+            CopilotHintsSection(assistant: model.assistant, isBusy: model.isBusy)
 
             Section("Apple transcription") {
                 Text(model.speechStatus).font(.footnote)
@@ -192,5 +199,50 @@ private struct TranscribeDiagnosticsSection: View {
 
     private func clock(_ value: Double) -> String {
         String(format: "%02d:%02d", Int(value) / 60, Int(value) % 60)
+    }
+}
+
+private struct CopilotHintsSection: View {
+    @ObservedObject var assistant: CopilotAssistant
+    let isBusy: Bool
+
+    var body: some View {
+        Section {
+            TextField("Goal, e.g. clarify scope, budget and owners", text: $assistant.goal, axis: .vertical)
+                .lineLimit(1 ... 3)
+                .disabled(isBusy)
+            Toggle("Silent hints on the glasses", isOn: $assistant.hintsEnabled)
+                .disabled(isBusy)
+            Picker("Engine", selection: $assistant.engineChoice) {
+                ForEach(CopilotAssistant.EngineChoice.allCases) { Text($0.title).tag($0) }
+            }
+            .disabled(isBusy)
+            LabeledContent("Hint every", value: "\(Int(CopilotAssistant.hintInterval)) s")
+            Text(assistant.engineStatus).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                if assistant.isThinking { ProgressView().controlSize(.small) }
+                Text(assistant.lastCheck).font(.footnote)
+            }
+            ForEach(assistant.hints) { hint in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hint.question).font(.body.weight(.semibold))
+                    Text("\(CopilotAssistant.clock(hint.elapsed)) · \(hint.source) · \(hint.reason)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !hint.evidence.isEmpty {
+                        Text(hint.evidence).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if !assistant.summary.isEmpty {
+                DisclosureGroup("Conversation notes") {
+                    Text(assistant.summary.rendered()).font(.caption).textSelection(.enabled)
+                }
+            }
+        } header: { Text("Copilot") } footer: {
+            Text("Checks the conversation on this iPhone and shows at most one short follow-up question "
+                + "per interval on the glasses, after a pause in speech. Nothing is spoken aloud. "
+                + "Apple Intelligence runs on-device; keyword rules are used when it is unavailable. "
+                + "Silence keeps the session and its context; it never ends it.")
+        }
     }
 }

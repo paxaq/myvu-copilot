@@ -53,6 +53,43 @@ final class TranscribeChannelTests: XCTestCase {
         XCTAssertEqual(state.optInt("extCode", 0), -1)
     }
 
+    /// Shape read from the glasses firmware's PResultMsg parser: `src` (or
+    /// `dst`) is an object with string `content` and number `type`, 0 = commit.
+    func testSubtitleUsesTheFirmwareResultShape() throws {
+        func line(_ json: String) throws -> (cmd: Int, src: JsonReader, hasDst: Bool) {
+            let outer = try XCTUnwrap(JsonReader(parsing: json))
+            let data = try XCTUnwrap(JsonReader(parsing: try XCTUnwrap(outer.opt("data") as? String)))
+            return (outer.optInt("msgCmd", -1), try XCTUnwrap(data.optObject("src")), data.opt("dst") != nil)
+        }
+        let partial = try line(GlassTranscribe.buildSubtitle("Hello the", committed: false))
+        XCTAssertEqual(partial.cmd, 53)
+        XCTAssertEqual(partial.src.optString("content"), "Hello the")
+        XCTAssertEqual(partial.src.optInt("type", -1), 1, "non-zero keeps the line open")
+        XCTAssertFalse(partial.hasDst, "a dst object would make the glasses ignore src")
+
+        let final = try line(GlassTranscribe.buildSubtitle("Hello there.", committed: true))
+        XCTAssertEqual(final.src.optInt("type", -1), 0, "0 commits the line")
+        XCTAssertEqual(final.src.optString("content"), "Hello there. ",
+                       "the firmware joins committed lines with no separator")
+        let padded = try line(GlassTranscribe.buildSubtitle("Next one \n ", committed: true))
+        XCTAssertEqual(padded.src.optString("content"), "Next one ", "one trailing space, not more")
+        let empty = try line(GlassTranscribe.buildSubtitle("", committed: true))
+        XCTAssertEqual(empty.src.optString("content"), "")
+        XCTAssertEqual(partial.src.optString("content").last, "e", "partials get no separator")
+
+        let long = String(repeating: "word ", count: 400)
+        let capped = try line(GlassTranscribe.buildSubtitle(long, committed: false))
+        XCTAssertEqual(capped.src.optString("content").count, GlassTranscribe.subtitleCharacterLimit)
+        XCTAssertTrue(long.hasSuffix(capped.src.optString("content")), "keeps the newest words")
+    }
+
+    func testPhoneStopUsesTransExit() throws {
+        // Intl firmware 1.0.11.53: 68 reaches PStopMsg -> stopTrans; 65 is invalid.
+        let stop = try XCTUnwrap(JsonReader(parsing: GlassTranscribe.buildExitAck()))
+        XCTAssertEqual(stop.optInt("msgCmd", -1), 68)
+        XCTAssertNil(stop.opt("data"))
+    }
+
     func testEnvelopeParsingKeepsPackagesJsonAndBinary() throws {
         let audio = Data([1, 2, 3, 4])
         let body = Pb.string(2, GlassTranscribe.glassPackage) + Pb.string(3, AppLayer.pkgLauncher)

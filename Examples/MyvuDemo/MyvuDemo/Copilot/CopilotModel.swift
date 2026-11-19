@@ -15,6 +15,20 @@ final class CopilotModel: ObservableObject {
         var id: String { rawValue }
         var title: String { self == .transcribe ? "Glasses Transcribe app" : "Voice assistant (code 110)" }
     }
+    /// Where recognized text is echoed on the glasses. The Transcribe scene's
+    /// own subtitle format is not recovered, so both candidates are offered;
+    /// the lens card always works but competes with hint cards.
+    enum SubtitleMode: String, CaseIterable, Identifiable {
+        case off, transcribeView, lensCard
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .off: return "Off"
+            case .transcribeView: return "Transcribe view (streaming)"
+            case .lensCard: return "Lens card"
+            }
+        }
+    }
     private enum ActiveCapture {
         case assistant(GlassesMicCapture)
         case transcribe(TranscribeChannelCapture)
@@ -35,6 +49,8 @@ final class CopilotModel: ObservableObject {
     @Published private(set) var isPreparingModel = false
     @Published var transcribeLocally = true
     @Published var saveRecording = false
+    @Published var subtitleMode = SubtitleMode.transcribeView
+    let assistant = CopilotAssistant()
     private let client: MyvuClient
     private var capture: ActiveCapture?
     private var transcriber: (any LocalTranscribing)?
@@ -48,6 +64,11 @@ final class CopilotModel: ObservableObject {
     private var speechFinalResultCount = 0
     private var testCardOutstanding = false
     private static let cardID = 7_010_008
+    private static let subtitleCardID = 7_010_010
+    private var tickTask: Task<Void, Never>?
+    private var lastPartialSentAt = Date.distantPast
+    private var subtitleCardShown = false
+    private var activeSubtitleMode = SubtitleMode.off
 
     var isBusy: Bool { phase != .idle || isPreparingModel }
     var isCapturing: Bool { phase == .armed || phase == .recording }
@@ -90,6 +111,8 @@ final class CopilotModel: ObservableObject {
         let shouldSave = saveRecording
         let selectedChannel = channel
         let openScene = openTranscribeFromPhone
+        lastPartialSentAt = .distantPast
+        activeSubtitleMode = shouldTranscribe ? subtitleMode : .off
         activeChannel = selectedChannel
         startTask = Task { [weak self] in
             guard let self else { return }
@@ -110,7 +133,12 @@ final class CopilotModel: ObservableObject {
                             self.speechFinalResultCount += 1
                             self.transcript += (self.transcript.isEmpty ? "" : " ") + text
                             self.partial = ""
-                        } else { self.partial = text }
+                            self.assistant.addFinal(text)
+                        } else {
+                            self.partial = text
+                            self.assistant.heardSpeech()
+                        }
+                        self.forwardSubtitle(text, final: final)
                     }
                     try await speech?.start()
                 } else { self.speechStatus = "Transcription off — audio diagnostics only" }
@@ -187,6 +215,7 @@ final class CopilotModel: ObservableObject {
                 }
                 self.phase = .armed
                 self.startTask = nil
+                self.beginCopilot(token: token)
             } catch {
                 await speech?.cancel()
                 guard self.generation == token else { return }
@@ -205,6 +234,7 @@ final class CopilotModel: ObservableObject {
         guard phase != .idle, phase != .stopping else { return }
         cardTask?.cancel()
         clearTestCard()
+        endCopilot()
         if phase == .preparing {
             startTask?.cancel()
             status = "Cancelling preparation"
@@ -234,6 +264,64 @@ final class CopilotModel: ObservableObject {
         session.sendStart()
     }
 
+    // MARK: - Copilot hints and subtitles
+
+    private func beginCopilot(token: UUID) {
+        assistant.begin(at: startedAt, send: { [weak self] json in
+            self?.client.sendAction(json)
+        }, onDisplay: { [weak self] showing in
+            self?.recordDisplayRequest(showing: showing)
+        })
+        tickTask?.cancel()
+        tickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.generation == token, self.isCapturing else { continue }
+                self.assistant.tick(secondsSinceAudio: self.secondsSinceAudio)
+            }
+        }
+    }
+
+    private func endCopilot() {
+        tickTask?.cancel()
+        tickTask = nil
+        assistant.end()
+        if subtitleCardShown {
+            subtitleCardShown = false
+            client.sendAction(LensCards.buildDismiss(numericId: Self.subtitleCardID))
+        }
+    }
+
+    private var secondsSinceAudio: TimeInterval? {
+        switch activeChannel {
+        case .transcribe: return transcribeUpdate?.secondsSinceAudio
+        case .assistant: return update?.secondsSinceAudio
+        case nil: return nil
+        }
+    }
+
+    /// Partials at most ~3 per second; every final is sent.
+    private func forwardSubtitle(_ text: String, final: Bool) {
+        let mode = activeSubtitleMode
+        guard mode != .off, !text.isEmpty, isCapturing else { return }
+        let now = Date()
+        if !final {
+            guard now.timeIntervalSince(lastPartialSentAt) >= 0.35 else { return }
+            lastPartialSentAt = now
+        }
+        switch mode {
+        case .transcribeView:
+            guard case .transcribe(let session) = capture else { break }
+            session.sendSubtitle(text, committed: final)
+        case .lensCard:
+            subtitleCardShown = true
+            let tail = text.count > 90 ? "…" + String(text.suffix(90)) : text
+            client.sendAction(LensCards.buildShow(title: "Transcript", body: tail, numericId: Self.subtitleCardID))
+        case .off:
+            break
+        }
+    }
+
     private func recordDisplayRequest(showing: Bool) {
         switch capture {
         case .assistant(let session): session.recordDisplayRequest(showing: showing)
@@ -247,6 +335,7 @@ final class CopilotModel: ObservableObject {
         phase = .stopping
         cardTask?.cancel()
         clearTestCard()
+        endCopilot()
         await audioTask?.value
         audioTask = nil
         await transcriber?.finish()
@@ -263,7 +352,9 @@ final class CopilotModel: ObservableObject {
             let report = Report(startedAt: startedAt, finishedAt: Date(), input: input,
                 savedAudio: url != nil, localTranscription: transcribeLocally,
                 result: reason ?? "Stopped by user", update: update, transcribeUpdate: transcribeUpdate,
-                speechResultCount: speechResultCount, speechFinalResultCount: speechFinalResultCount)
+                speechResultCount: speechResultCount, speechFinalResultCount: speechFinalResultCount,
+                subtitleMode: activeSubtitleMode.rawValue, hintsShown: assistant.hints.count,
+                hintEngine: assistant.engineStatus, hintChecks: assistant.checkHistory)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
@@ -318,5 +409,11 @@ final class CopilotModel: ObservableObject {
         let transcribeUpdate: TranscribeChannelCapture.Update?
         let speechResultCount: Int
         let speechFinalResultCount: Int
+        /// Settings and counts only; subtitle and hint text are never saved.
+        let subtitleMode: String
+        let hintsShown: Int
+        let hintEngine: String
+        /// Check outcomes with session time; no transcript or hint text.
+        let hintChecks: [String]
     }
 }

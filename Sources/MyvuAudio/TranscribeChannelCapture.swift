@@ -77,6 +77,7 @@ public final class TranscribeChannelCapture: MyvuClientObserver {
         public var events: [Event]
         public var omittedEvents: Int
         public var inbound: [InboundBucket]
+        public var subtitlesSent: Int
     }
 
     public static let stallThreshold: TimeInterval = 3
@@ -97,6 +98,7 @@ public final class TranscribeChannelCapture: MyvuClientObserver {
     private var inboundTap: UUID?
     private var inboundBuckets: [String: InboundBucket] = [:]
     private var inboundOverflow = 0
+    private var subtitlesSent = 0
     private var timer: DispatchSourceTimer?
     private var writer: WaveFileWriter?
     private var rawDump: FileHandle?
@@ -194,6 +196,21 @@ public final class TranscribeChannelCapture: MyvuClientObserver {
     public func sendStart() { queue.async { [weak self] in self?.announcePhone(automatic: false) } }
 
     public func stop() { queue.async { [weak self] in self?.finish(error: nil) } }
+
+    /// Echo a recognized line into the glasses' own Transcribe view
+    /// (TRANS_REMOTE_RESULT, 53). Only counted, never logged: it is content.
+    public func sendSubtitle(_ text: String, committed: Bool) {
+        queue.async { [weak self] in
+            guard let self, self.active, self.glassesReady else { return }
+            if self.subtitlesSent == 0 {
+                self.record(.sent, cmd: GlassTranscribe.Phone2Glass.remoteResult,
+                            name: "TRANS_REMOTE_RESULT (first subtitle)", detail: nil)
+            }
+            self.subtitlesSent += 1
+            self.client.sendAction(GlassTranscribe.buildSubtitle(text, committed: committed),
+                                   targetPkg: self.replyTarget, sourcePkg: self.replySource)
+        }
+    }
 
     public func recordDisplayRequest(showing: Bool) {
         queue.async { [weak self] in
@@ -413,7 +430,8 @@ public final class TranscribeChannelCapture: MyvuClientObserver {
                events: events, omittedEvents: omittedEvents,
                inbound: inboundBuckets.values.sorted { $0.firstAt < $1.firstAt }
                    + (inboundOverflow > 0 ? [InboundBucket(key: "other kinds (not grouped)",
-                        count: inboundOverflow, bytes: 0, minSize: 0, maxSize: 0, firstAt: 0, lastAt: 0)] : []))
+                        count: inboundOverflow, bytes: 0, minSize: 0, maxSize: 0, firstAt: 0, lastAt: 0)] : []),
+               subtitlesSent: subtitlesSent)
     }
 
     private func finish(error: String?, notifyGlasses: Bool = true) {
@@ -422,6 +440,8 @@ public final class TranscribeChannelCapture: MyvuClientObserver {
         if notifyGlasses {
             send(GlassTranscribe.buildTransState(GlassTranscribe.TransState.end),
                  cmd: GlassTranscribe.Phone2Glass.transState, name: "TRANS_STATE end")
+            // 68 is what actually stops the glasses view (firmware PStopMsg).
+            send(GlassTranscribe.buildExitAck(), cmd: GlassTranscribe.Phone2Glass.exitAck, name: "TRANS_EXIT (stop)")
             send(GlassTranscribe.buildPhoneServerExit(), cmd: GlassTranscribe.Phone2Glass.phoneServerExit,
                  name: "PHONE_TRANS_SERVER_EXIT")
         }

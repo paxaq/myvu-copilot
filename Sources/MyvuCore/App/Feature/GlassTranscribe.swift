@@ -215,7 +215,47 @@ public enum GlassTranscribe {
         return message(Phone2Glass.recordState, data: body.serialized())
     }
 
+    /// Longest `content` the glasses' text view takes from one message: its
+    /// decoder stops after 0x580 (1,408) characters. Kept well under that.
+    public static let subtitleCharacterLimit = 1_000
+
+    /// One recognized line for the glasses' own Transcribe view
+    /// (TRANS_REMOTE_RESULT, 53).
+    ///
+    /// Shape from the glasses firmware (`Pages/Translation/message/phone/
+    /// PResultMsg.cpp`, intl 1.0.11.53): the parser reads `dst` then `src`, each
+    /// an object with a string `content` and a number `type`; `type == 0`
+    /// commits the line, anything else is a partial that is still changing. When
+    /// `dst` is present `src` is ignored, so a transcript sends `src` only. In
+    /// TRANSCRIBE mode the text goes to the main text view.
+    /// - Parameters:
+    ///   - text: the whole current sentence so far (partials are cumulative).
+    ///   - committed: true for a final sentence.
+    ///
+    /// The text view appends each committed line straight after the previous
+    /// one with no separator, so a committed line ends with one space; the next
+    /// partial is drawn after it.
+    public static func buildSubtitle(_ text: String, committed: Bool) -> String {
+        var body = text
+        if committed {
+            while body.last?.isWhitespace == true { body.removeLast() }
+            if !body.isEmpty { body += " " }
+        }
+        let content = body.count > subtitleCharacterLimit ? String(body.suffix(subtitleCharacterLimit)) : body
+        var line = JsonObject()
+        line.put("content", content)
+        line.put("type", committed ? 0 : 1)
+        var data = JsonObject()
+        data.put("src", line)
+        return message(Phone2Glass.remoteResult, data: data.serialized())
+    }
+
+    /// TRANS_EXIT (68), no data. The firmware's `PStopMsg` calls `stopTrans`
+    /// while the view is running, so this both acks a glasses-side exit and
+    /// stops Transcribe from the phone.
     public static func buildExitAck() -> String { message(Phone2Glass.exitAck) }
+    /// PHONE_TRANS_SERVER_EXIT (65). Intl firmware 1.0.11.53 treats 65 as an
+    /// invalid command and ignores it; kept after 68 for other firmware.
     public static func buildPhoneServerExit() -> String { message(Phone2Glass.phoneServerExit) }
 }
 
